@@ -1085,6 +1085,25 @@ end
 --   2. Smaller dirty area = smaller nightmode flash and less battery.
 -- Falls back to the full markDirty path until the first paint has populated
 -- the region cache (chicken-and-egg: we don't know the dimen pre-paint).
+-- Refresh, without repainting, the overlay bands the last paint populated.
+-- For the #114 catch-up, where the framebuffer is already current and only the
+-- e-ink refresh may be missing. UIManager:setDirty(nil, ...) is KOReader's
+-- documented refresh-without-repaint: no widget is flagged, nothing is written
+-- to the framebuffer, so unlike a repaint it is safe even if something has
+-- covered the reader again by the time this runs. With no band painted yet
+-- there is nothing to refresh regionally, so it falls back to the full path.
+function Bookends:_refreshOverlayBands()
+    if not self._top_paint_rect and not self._bottom_paint_rect then
+        return self:markOverlayDirty()
+    end
+    if self._top_paint_rect then
+        UIManager:setDirty(nil, "ui", self._top_paint_rect)
+    end
+    if self._bottom_paint_rect then
+        UIManager:setDirty(nil, "ui", self._bottom_paint_rect)
+    end
+end
+
 function Bookends:markOverlayDirty()
     -- #114: while a menu or dialog covers the reader the overlay is not
     -- visible, so repainting buys nothing except a full-page write to the
@@ -1110,6 +1129,18 @@ function Bookends:markOverlayDirty()
     -- getTopmostVisibleWidget skips `invisible` widgets, so our own flipping
     -- halo (and any other toast overlay of that shape) does not count as
     -- covering us.
+    --
+    -- Deliberately ANY visible widget on top, not only one overlapping our
+    -- bands. It reads as too broad and a review flagged it; it is not.
+    -- UIManager:_repaint calls paintTo on the WHOLE of ReaderUI whenever it is
+    -- dirty - the region passed to setDirty only scopes the e-ink refresh - so
+    -- a band-limited repaint still writes the full page into the framebuffer
+    -- under whatever is on top, which is the #114 race exactly. Narrowing
+    -- this to widgets that overlap our bands would bring the bug back for
+    -- every dialog that sits clear of them. The cost of the broad check is
+    -- that a value tick waits until nothing is on top; a toast holds it for
+    -- seconds, and a third-party plugin that parked a non-invisible widget
+    -- permanently would hold it until that widget went.
     local top = UIManager:getTopmostVisibleWidget()
     if top and top ~= self.ui then
         self.dirty = true
@@ -1540,11 +1571,18 @@ function Bookends:paintTo(bb, x, y)
     -- clearing the deferral there would reinstate the repaint exactly where it
     -- was skipped. Scheduling rather than calling setDirty inline keeps the
     -- no-second-refresh-during-paint rule above intact.
+    --
+    -- A REFRESH, not a repaint (see _refreshOverlayBands). This paint is the
+    -- one drawing current content - the deferred tick left self.dirty set - so
+    -- only the e-ink refresh of our bands can still be missing. Routing it
+    -- back through markOverlayDirty re-flagged dirty and marked ReaderUI dirty
+    -- again: a second expansion, rebuild and full ReaderUI repaint for pixels
+    -- that were already right.
     if self._deferred_overlay_repaint then
         local top = UIManager:getTopmostVisibleWidget()
         if not top or top == self.ui then
             self._deferred_overlay_repaint = nil
-            UIManager:nextTick(function() self:markOverlayDirty() end)
+            UIManager:nextTick(function() self:_refreshOverlayBands() end)
         end
     end
 
