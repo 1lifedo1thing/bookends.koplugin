@@ -2070,36 +2070,42 @@ function Bookends:_paintToInner(bb, x, y)
     -- Sits between Phase 1 (which determines which lines actually render) and
     -- Phase 0/2 (which paint bars and widgets on top), so the fill height
     -- excludes parity-filtered and empty-conditional lines.
+    --
+    -- Each section has its own colour (#102). Colour.backgroundFor resolves
+    -- one: its own key, else the original shared background_color, so an older
+    -- preset still fills both sections alike. Either may be nil (no fill).
     do
-        local bg = self.settings:readSetting("background_color")
-        if bg then
-            local bg_color = Colour.parseColorValue(bg, Screen:isColorEnabled())
-            if bg_color then
-                local positions_data = self:_assembleFillPositionsData(active_line_indices)
-                local extents = OverlayWidget.computeEndFillExtents(positions_data, screen_h)
-                if extents.top_any_enabled and extents.top_y > 0 then
-                    -- Start BELOW bookshelf's strip and extend by however far
-                    -- the top row moved down for it. Two reasons, both real:
-                    -- ReaderView paints its view modules in pairs() order, so
-                    -- we cannot count on drawing before bookshelf does and a
-                    -- fill starting at y would sometimes erase the strip; and
-                    -- the extents come from the STORED v_offsets, which know
-                    -- nothing about the shift, so an unextended fill left the
-                    -- bottom of the row sitting on unfilled page.
-                    -- Content moved down by exactly strip_h, so the region
-                    -- to fill is the same height as before and simply starts
-                    -- lower. (This used to be top_y + shift - strip_h, back
-                    -- when shift and strip_h were two different numbers.)
-                    local strip_h = self._bs_strip_h or 0
-                    local fill_h = extents.top_y
-                    if fill_h > 0 then
-                        OverlayWidget.bbPaintRect(bb, x, y + strip_h, screen_w, fill_h, bg_color)
-                    end
+        local read = function(k) return self.settings:readSetting(k) end
+        local is_colour = Screen:isColorEnabled()
+        local top_bg = Colour.backgroundFor(read, "top")
+        local bottom_bg = Colour.backgroundFor(read, "bottom")
+        local top_color = top_bg and Colour.parseColorValue(top_bg, is_colour)
+        local bottom_color = bottom_bg and Colour.parseColorValue(bottom_bg, is_colour)
+        if top_color or bottom_color then
+            local positions_data = self:_assembleFillPositionsData(active_line_indices)
+            local extents = OverlayWidget.computeEndFillExtents(positions_data, screen_h)
+            if top_color and extents.top_any_enabled and extents.top_y > 0 then
+                -- Start BELOW bookshelf's strip and extend by however far
+                -- the top row moved down for it. Two reasons, both real:
+                -- ReaderView paints its view modules in pairs() order, so
+                -- we cannot count on drawing before bookshelf does and a
+                -- fill starting at y would sometimes erase the strip; and
+                -- the extents come from the STORED v_offsets, which know
+                -- nothing about the shift, so an unextended fill left the
+                -- bottom of the row sitting on unfilled page.
+                -- Content moved down by exactly strip_h, so the region
+                -- to fill is the same height as before and simply starts
+                -- lower. (This used to be top_y + shift - strip_h, back
+                -- when shift and strip_h were two different numbers.)
+                local strip_h = self._bs_strip_h or 0
+                local fill_h = extents.top_y
+                if fill_h > 0 then
+                    OverlayWidget.bbPaintRect(bb, x, y + strip_h, screen_w, fill_h, top_color)
                 end
-                if extents.bottom_any_enabled and extents.bottom_y < screen_h then
-                    local h = screen_h - extents.bottom_y
-                    OverlayWidget.bbPaintRect(bb, x, y + extents.bottom_y, screen_w, h, bg_color)
-                end
+            end
+            if bottom_color and extents.bottom_any_enabled and extents.bottom_y < screen_h then
+                local h = screen_h - extents.bottom_y
+                OverlayWidget.bbPaintRect(bb, x, y + extents.bottom_y, screen_w, h, bottom_color)
             end
         end
     end
